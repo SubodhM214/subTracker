@@ -5,21 +5,19 @@ import jwt from "jsonwebtoken";
 import { JWT_SECRET, JWT_EXPIRES_IN } from "../config/env.js";
 
 export const signUp = async (req, res, next) => {
-  //this not for user session. it is for db atomicity
   const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
+    session.startTransaction();
     //logic to create user
     const { name, email, password } = req.body;
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      const error = new Error("User already exists");
-      throw error;
+     
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: "User already exists" });
     }
-    //hashing password
-
+   
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
@@ -30,8 +28,7 @@ export const signUp = async (req, res, next) => {
     const token = jwt.sign({ userId: newUsers[0]._id }, JWT_SECRET, {
       expiresIn: JWT_EXPIRES_IN,
     });
-    session.commitTransaction();
-    session.endSession();
+    await session.commitTransaction();
     res.status(201).json({
       success: true,
       message: "user created Successfully",
@@ -39,9 +36,15 @@ export const signUp = async (req, res, next) => {
       user: newUsers[0],
     });
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
+    // Only abort if transaction is still active
+    try {
+      await session.abortTransaction();
+    } catch (e) {
+      console.error("Failed to abort transaction:", e);
+    }
     next(error);
+  } finally {
+    session.endSession();
   }
 };
 
